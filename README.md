@@ -4,8 +4,8 @@ A searchable in-game AddOn list for **World of Warcraft 3.3.5a (Wrath of the Lic
 
 ## Features
 
-- **Search bar**: matches addon names, descriptions, authors and categories. Several words narrow the results (`bag tool` finds Bagnon Tooltips).
-- **Two views**: an A-Z list, or grouped into categories (Auctions, Combat, Dungeons & Raids, Loot, ...). Your last choice is remembered.
+- **Search bar**: matches addon names. Several words narrow the results (`bag tool` finds Bagnon Tooltips).
+- **Presets**: save which addons are on as a named preset and switch between them from the dropdown, like loadouts in the modern talent window. See [Presets](#presets).
 - **Sub-addons nested under their parent**: DBM modules under DBM Core, ElvUI plugins under ElvUI, AtlasLoot modules under AtlasLoot, and so on. Groups can be collapsed.
 - **Okay turns into Reload UI** as soon as a change needs a reload. Cancel, the X button and Escape undo changes made since you opened the window.
 - **Memory usage**: the total, how many addons are loaded and the largest one, plus per-addon memory on each row.
@@ -20,6 +20,17 @@ A searchable in-game AddOn list for **World of Warcraft 3.3.5a (Wrath of the Lic
 - `/addons` or `/alp`
 
 If ElvUI Enhanced or Addon Control Panel already adds an AddOns button to the Esc menu, that button opens this list instead, so you never get two buttons. Without them, AddonListPlus adds its own button.
+
+## Presets
+
+Open the dropdown in the top-left corner:
+
+- **New Preset** saves the addons that are currently ticked under a name you choose.
+- **Click a preset** to tick its addons. Press **Reload UI** to apply it, or **Cancel** to undo.
+- **Note icon** on a preset line: overwrite that preset with the current ticks.
+- **Red X** on a preset line: delete that preset (asks first).
+
+Presets are shared by all characters on your account. The dropdown shows the preset that matches your current ticks, or **Custom** if none does. Addons installed after a preset was saved are left as they are when you apply it.
 
 ## Installation
 

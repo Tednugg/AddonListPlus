@@ -6,8 +6,8 @@ local GameTooltip = GameTooltip
 
 -- ElvUI uses bigger fonts (its "small" font is 12 instead of 10), so it gets a roomier layout.
 local LAYOUT = {
-	blizzard = { w = 580, h = 600, row = 22, search = 160, usageY = 70, statY = 88, divY = 106, listTop = 112 },
-	elvui    = { w = 720, h = 680, row = 26, search = 200, usageY = 72, statY = 94, divY = 116, listTop = 122 },
+	blizzard = { w = 580, h = 600, row = 22, search = 160, usageY = 70, statY = 88, divY = 106, listTop = 112, menu = 210, menuLine = 18 },
+	elvui    = { w = 720, h = 680, row = 26, search = 200, usageY = 72, statY = 94, divY = 116, listTop = 122, menu = 250, menuLine = 22 },
 }
 local lay = LAYOUT.blizzard
 local FRAME_W, FRAME_H, ROW_H = lay.w, lay.h, lay.row
@@ -30,11 +30,17 @@ local L = {
 	ENABLE_ALL = "Enable All",
 	DISABLE_ALL = "Disable All",
 	RELOAD = "Reload UI",
-	VIEW_AZ = "A-Z List",
-	VIEW_CAT = "Categories",
+	PRESETS = "Presets",
+	CUSTOM = "Custom",
+	NEW_PRESET = "New Preset",
+	NEW_PROMPT = "Name for the new preset:",
+	SAVE_TIP = "Save the current addons to this preset",
+	DELETE_TIP = "Delete this preset",
+	DELETE_PROMPT = "Delete preset \"%s\"?",
+	SAVED = "Preset \"%s\" saved.",
+	DELETED = "Preset \"%s\" deleted.",
 	VERSION = "Version: %s",
 	AUTHOR = "Author: %s",
-	CATEGORY = "Category: %s",
 	DEPS = "Dependencies: %s",
 	MEMORY = "Memory: %s",
 	DEMAND = ADDON_DEMAND_LOADED or "Only loadable on demand",
@@ -42,22 +48,22 @@ local L = {
 	SHIFT_HINT = "Shift-click the checkbox to change only this addon, not its sub-addons.",
 }
 
-local VIEWS = {
-	{ value = "az", text = L.VIEW_AZ },
-	{ value = "category", text = L.VIEW_CAT },
-}
-
 local TEX = {
 	plus = [[Interface\Buttons\UI-PlusButton-Up]],
 	minus = [[Interface\Buttons\UI-MinusButton-Up]],
 	expandHighlight = [[Interface\Buttons\UI-PlusButton-Hilight]],
+	check = [[Interface\Buttons\UI-CheckBox-Check]],
+	newPreset = [[Interface\PaperDollInfoFrame\Character-Plus]],
+	save = [[Interface\Buttons\UI-GuildButton-PublicNote-Up]],
+	delete = [[Interface\Buttons\UI-GroupLoot-Pass-Up]],
 }
 
 local UI = {}
 ns.UI = UI
 
 local frame, inset, scroll, scrollBar, rows, numRows
-local searchBox, outOfDate, viewDropDown, okayButton
+local searchBox, outOfDate, presetDropDown, okayButton
+local presetMenu, presetCatcher
 local statLeft, statMid, statRight
 local trustTextureResult = false
 
@@ -70,31 +76,19 @@ local function SetSize(region, w, h)
 	region:SetHeight(h)
 end
 
+-- Addons without an icon (or whose icon file is missing) get the question mark.
+local FALLBACK_ICON = [[Interface\Icons\INV_Misc_QuestionMark]]
 local iconOK = {}
 local function SetIcon(tex, path)
-	if not path then
-		tex:Hide()
-		return
-	end
-	if iconOK[path] == false then
-		tex:Hide()
-		return
+	if not path or iconOK[path] == false then
+		path = FALLBACK_ICON
 	end
 	local ok = tex:SetTexture(path)
-	if trustTextureResult and not ok then
+	if trustTextureResult and not ok and path ~= FALLBACK_ICON then
 		iconOK[path] = false
-		tex:Hide()
-		return
+		tex:SetTexture(FALLBACK_ICON)
 	end
-	iconOK[path] = true
 	tex:Show()
-end
-
-local function ViewText(value)
-	for _, v in ipairs(VIEWS) do
-		if v.value == value then return v.text end
-	end
-	return L.VIEW_AZ
 end
 
 local function StatusText(node)
@@ -129,7 +123,6 @@ local function ShowTooltip(row)
 	GameTooltip:AddLine(n.title)
 	if n.version then GameTooltip:AddLine(format(L.VERSION, n.version), 0.8, 0.8, 0.8) end
 	if n.author then GameTooltip:AddLine(format(L.AUTHOR, ns.StripColors(n.author)), 0.8, 0.8, 0.8) end
-	if n.category then GameTooltip:AddLine(format(L.CATEGORY, n.category), 0.8, 0.8, 0.8) end
 	if n.notes and n.notes ~= "" then
 		GameTooltip:AddLine(n.notes, 1, 1, 1, true)
 	end
@@ -166,27 +159,16 @@ local function SetExpandState(btn, collapsed)
 end
 
 local function Row_OnClick(row)
-	local e = row.entry
-	if not e then return end
-	if e.kind == "category" then
-		if ns.searching then return end
-		ns.db.collapsedCats[e.category] = not ns.db.collapsedCats[e.category] or nil
-		UI:Refresh()
-	else
+	if row.entry then
 		row.check:Click()
 	end
 end
 
 local function Expand_OnClick(btn)
-	local row = btn:GetParent()
-	local e = row.entry
+	local e = btn:GetParent().entry
 	if not e or ns.searching then return end
-	if e.kind == "category" then
-		ns.db.collapsedCats[e.category] = not ns.db.collapsedCats[e.category] or nil
-	else
-		local name = e.node.name
-		ns.db.collapsedAddons[name] = not ns.db.collapsedAddons[name] or nil
-	end
+	local name = e.node.name
+	ns.db.collapsedAddons[name] = not ns.db.collapsedAddons[name] or nil
 	UI:Refresh()
 end
 
@@ -256,23 +238,6 @@ local function CreateRow(i)
 	return row
 end
 
-local function ConfigureCategoryRow(row, e)
-	row.check:Hide()
-	row.icon:Hide()
-	row.status:Hide()
-
-	row.expand:ClearAllPoints()
-	row.expand:SetPoint("LEFT", row, "LEFT", 4, 0)
-	SetExpandState(row.expand, e.collapsed)
-	row.expand:Show()
-
-	row.title:ClearAllPoints()
-	row.title:SetPoint("LEFT", row.expand, "RIGHT", 6, 0)
-	row.title:SetPoint("RIGHT", row, "RIGHT", -4, 0)
-	row.title:SetText(e.category)
-	row.title:SetTextColor(1, 0.82, 0)
-end
-
 local function ConfigureAddonRow(row, e)
 	local n = e.node
 	local x = 4 + e.depth * INDENT
@@ -339,11 +304,7 @@ function UI:Render()
 		local e = list[offset + i]
 		row.entry = e
 		if e then
-			if e.kind == "category" then
-				ConfigureCategoryRow(row, e)
-			else
-				ConfigureAddonRow(row, e)
-			end
+			ConfigureAddonRow(row, e)
 			row:Show()
 		else
 			row:Hide()
@@ -380,6 +341,7 @@ function UI:Refresh(resetScroll)
 	end
 	self:Render()
 	self:UpdateButtons()
+	self:UpdatePresetText()
 end
 
 ---------------------------------------------------------------------------
@@ -449,30 +411,242 @@ local function CreateSearchBox()
 	return box
 end
 
-local function CreateViewDropDown()
-	local dd = CreateFrame("Frame", "AddonListPlusViewDropDown", frame, "UIDropDownMenuTemplate")
+---------------------------------------------------------------------------
+-- Presets dropdown: a list of presets (click to apply, save/delete icons on
+-- each line) and a "New Preset" line that asks for a name.
+---------------------------------------------------------------------------
+
+local function Print(msg)
+	DEFAULT_CHAT_FRAME:AddMessage("|cff33ff99AddonListPlus|r: " .. msg)
+end
+
+local function HidePresetMenu()
+	if presetMenu then
+		presetMenu:Hide()
+		presetCatcher:Hide()
+	end
+end
+
+function UI:UpdatePresetText()
+	if not presetDropDown then return end
+	local text = ns:ActivePreset() or (next(ns.db.presets) and L.CUSTOM) or L.PRESETS
+	UIDropDownMenu_SetText(presetDropDown, text)
+end
+
+function UI:CreatePreset(name)
+	name = name and name:gsub("^%s+", ""):gsub("%s+$", "") or ""
+	if name == "" then return end
+	ns:SavePreset(name)
+	Print(format(L.SAVED, name))
+	self:AfterPresetChange()
+end
+
+function UI:AfterPresetChange()
+	self:UpdatePresetText()
+	if presetMenu and presetMenu:IsShown() then
+		self:UpdatePresetMenu()
+	end
+end
+
+StaticPopupDialogs.ADDONLISTPLUS_NEW_PRESET = {
+	text = L.NEW_PROMPT,
+	button1 = SAVE or "Save",
+	button2 = CANCEL,
+	hasEditBox = 1,
+	maxLetters = 32,
+	OnShow = function(self)
+		local eb = _G[self:GetName() .. "EditBox"]
+		eb:SetText("")
+		eb:SetFocus()
+	end,
+	OnAccept = function(self)
+		UI:CreatePreset(_G[self:GetName() .. "EditBox"]:GetText())
+	end,
+	EditBoxOnEnterPressed = function(self)
+		UI:CreatePreset(self:GetText())
+		self:GetParent():Hide()
+	end,
+	EditBoxOnEscapePressed = function(self)
+		self:GetParent():Hide()
+	end,
+	timeout = 0,
+	whileDead = 1,
+	hideOnEscape = 1,
+}
+
+StaticPopupDialogs.ADDONLISTPLUS_DELETE_PRESET = {
+	text = L.DELETE_PROMPT,
+	button1 = YES,
+	button2 = NO,
+	OnAccept = function(self, data)
+		local name = data or UI.pendingDelete
+		if not name then return end
+		ns:DeletePreset(name)
+		Print(format(L.DELETED, name))
+		UI:AfterPresetChange()
+	end,
+	timeout = 0,
+	whileDead = 1,
+	hideOnEscape = 1,
+	showAlert = 1,
+}
+
+local function MenuIconButton(parent, texture, tip)
+	local b = CreateFrame("Button", nil, parent)
+	SetSize(b, 14, 14)
+	b:SetNormalTexture(texture)
+	b:SetAlpha(0.5)
+	b:SetScript("OnEnter", function(self)
+		self:SetAlpha(1)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:SetText(tip)
+		GameTooltip:Show()
+	end)
+	b:SetScript("OnLeave", function(self)
+		self:SetAlpha(0.5)
+		GameTooltip:Hide()
+	end)
+	return b
+end
+
+local function MenuLine_OnClick(line)
+	HidePresetMenu()
+	if line.isNew then
+		StaticPopup_Show("ADDONLISTPLUS_NEW_PRESET")
+		return
+	end
+	ns:ApplyPreset(line.preset)
+	PlaySound("igMainMenuOptionCheckBoxOn")
+	UI:Refresh()
+end
+
+local function CreateMenuLine(i)
+	local lineH = lay.menuLine
+	local line = CreateFrame("Button", nil, presetMenu)
+	line:SetHeight(lineH)
+	line:SetPoint("TOPLEFT", presetMenu, "TOPLEFT", 8, -8 - (i - 1) * lineH)
+	line:SetPoint("RIGHT", presetMenu, "RIGHT", -8, 0)
+	line:SetScript("OnClick", MenuLine_OnClick)
+
+	local hl = line:CreateTexture(nil, "HIGHLIGHT")
+	hl:SetTexture([[Interface\QuestFrame\UI-QuestTitleHighlight]])
+	hl:SetBlendMode("ADD")
+	hl:SetAlpha(0.35)
+	hl:SetAllPoints()
+
+	line.mark = line:CreateTexture(nil, "ARTWORK")
+	SetSize(line.mark, 14, 14)
+	line.mark:SetPoint("LEFT", line, "LEFT", 0, 0)
+
+	line.delete = MenuIconButton(line, TEX.delete, L.DELETE_TIP)
+	line.delete:SetPoint("RIGHT", line, "RIGHT", 0, 0)
+	line.delete:SetScript("OnClick", function(self)
+		local name = self:GetParent().preset
+		HidePresetMenu()
+		UI.pendingDelete = name
+		StaticPopup_Show("ADDONLISTPLUS_DELETE_PRESET", name, nil, name)
+	end)
+
+	line.save = MenuIconButton(line, TEX.save, L.SAVE_TIP)
+	line.save:SetPoint("RIGHT", line.delete, "LEFT", -6, 0)
+	line.save:SetScript("OnClick", function(self)
+		local name = self:GetParent().preset
+		ns:SavePreset(name)
+		Print(format(L.SAVED, name))
+		UI:AfterPresetChange()
+	end)
+
+	line.text = line:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+	line.text:SetJustifyH("LEFT")
+	line.text:SetPoint("LEFT", line.mark, "RIGHT", 4, 0)
+	line.text:SetPoint("RIGHT", line.save, "LEFT", -6, 0)
+	SingleLine(line.text)
+
+	return line
+end
+
+function UI:UpdatePresetMenu()
+	local names = ns:PresetNames()
+	local active = ns:ActivePreset()
+	local count = #names + 1
+	presetMenu.lines = presetMenu.lines or {}
+
+	for i = 1, count do
+		local line = presetMenu.lines[i]
+		if not line then
+			line = CreateMenuLine(i)
+			presetMenu.lines[i] = line
+		end
+		if i <= #names then
+			local name = names[i]
+			line.preset, line.isNew = name, nil
+			line.text:SetText(name)
+			line.text:SetTextColor(1, 0.82, 0)
+			line.mark:SetTexture(TEX.check)
+			if name == active then line.mark:Show() else line.mark:Hide() end
+			line.save:Show()
+			line.delete:Show()
+		else
+			line.preset, line.isNew = nil, true
+			line.text:SetText(L.NEW_PRESET)
+			line.text:SetTextColor(0.1, 1, 0.1)
+			line.mark:SetTexture(TEX.newPreset)
+			line.mark:Show()
+			line.save:Hide()
+			line.delete:Hide()
+		end
+		line:Show()
+	end
+	for i = count + 1, #presetMenu.lines do
+		presetMenu.lines[i]:Hide()
+	end
+	presetMenu:SetHeight(16 + count * lay.menuLine)
+end
+
+local function TogglePresetMenu()
+	if presetMenu:IsShown() then
+		HidePresetMenu()
+		return
+	end
+	UI:UpdatePresetMenu()
+	presetCatcher:Show()
+	presetMenu:Show()
+	PlaySound("igMainMenuOptionCheckBoxOn")
+end
+
+local function CreatePresetDropDown()
+	local dd = CreateFrame("Frame", "AddonListPlusPresetDropDown", frame, "UIDropDownMenuTemplate")
 	dd:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, -34)
 	UIDropDownMenu_SetWidth(dd, 110)
+	_G[dd:GetName() .. "Button"]:SetScript("OnClick", TogglePresetMenu)
+	dd:EnableMouse(true)
+	dd:SetScript("OnMouseDown", TogglePresetMenu)
 
-	local function OnSelect(_, value)
-		ns.db.view = value
-		UIDropDownMenu_SetText(dd, ViewText(value))
-		CloseDropDownMenus()
-		UI:Refresh(true)
-	end
+	-- Clicking anywhere outside the open menu closes it. The catcher and menu hang off UIParent
+	-- (not the window) so raising the window can't shuffle their layering.
+	presetCatcher = CreateFrame("Button", nil, UIParent)
+	presetCatcher:SetAllPoints(UIParent)
+	presetCatcher:SetFrameStrata("DIALOG")
+	presetCatcher:SetFrameLevel(1)
+	presetCatcher:SetScript("OnClick", HidePresetMenu)
+	presetCatcher:Hide()
 
-	UIDropDownMenu_Initialize(dd, function(_, level)
-		for _, v in ipairs(VIEWS) do
-			local info = UIDropDownMenu_CreateInfo()
-			info.text = v.text
-			info.value = v.value
-			info.arg1 = v.value
-			info.checked = (ns.db.view == v.value)
-			info.func = OnSelect
-			UIDropDownMenu_AddButton(info, level)
-		end
-	end)
-	UIDropDownMenu_SetText(dd, ViewText(ns.db.view))
+	presetMenu = CreateFrame("Frame", "AddonListPlusPresetMenu", UIParent)
+	presetMenu:SetFrameStrata("DIALOG")
+	presetMenu:SetFrameLevel(10)
+	presetMenu:SetWidth(lay.menu)
+	presetMenu:SetPoint("TOPLEFT", dd, "BOTTOMLEFT", 16, 6)
+	presetMenu:EnableMouse(true)
+	presetMenu:SetBackdrop({
+		bgFile = [[Interface\Tooltips\UI-Tooltip-Background]],
+		edgeFile = [[Interface\Tooltips\UI-Tooltip-Border]],
+		tile = true, tileSize = 16, edgeSize = 16,
+		insets = { left = 4, right = 4, top = 4, bottom = 4 },
+	})
+	presetMenu:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+	presetMenu:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
+	presetMenu:Hide()
+
 	return dd
 end
 
@@ -481,7 +655,7 @@ local function CreateOutOfDateCheck()
 	SetSize(cb, 24, 24)
 	if lay == LAYOUT.elvui then
 		-- Sit right after the dropdown so the larger ElvUI text can't run into the search box.
-		cb:SetPoint("LEFT", viewDropDown, "RIGHT", 8, 0)
+		cb:SetPoint("LEFT", presetDropDown, "RIGHT", 8, 0)
 	else
 		cb:SetPoint("TOP", frame, "TOP", -78, -36)
 	end
@@ -520,7 +694,9 @@ local function ApplyElvUISkin(header, title, close, buttons)
 	try(S.HandleCloseButton, S, close, frame)
 	try(S.HandleScrollBar, S, scrollBar)
 	try(S.HandleEditBox, S, searchBox)
-	try(S.HandleDropDownBox, S, viewDropDown, 130)
+	try(S.HandleDropDownBox, S, presetDropDown, 130)
+	presetMenu:SetBackdrop(nil)
+	try(presetMenu.SetTemplate, presetMenu, "Transparent")
 	try(S.HandleCheckBox, S, outOfDate)
 	for _, b in ipairs(buttons) do
 		try(S.HandleButton, S, b)
@@ -548,7 +724,7 @@ function UI:Create()
 	frame = CreateFrame("Frame", "AddonListPlusFrame", UIParent)
 	SetSize(frame, FRAME_W, FRAME_H)
 	frame:SetPoint("CENTER")
-	frame:SetFrameStrata("DIALOG")
+	frame:SetFrameStrata("HIGH") -- below DIALOG, so the preset name/delete prompts appear on top
 	frame:SetToplevel(true)
 	frame:EnableMouse(true)
 	frame:SetMovable(true)
@@ -584,7 +760,7 @@ function UI:Create()
 	close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
 
 	-- Top row
-	viewDropDown = CreateViewDropDown()
+	presetDropDown = CreatePresetDropDown()
 	outOfDate = CreateOutOfDateCheck()
 	searchBox = CreateSearchBox()
 
@@ -685,6 +861,7 @@ function UI:Create()
 	end)
 	frame:SetScript("OnHide", function(self)
 		searchBox:ClearFocus()
+		HidePresetMenu()
 		if not self.committed then
 			ns:RevertEdit()
 		end

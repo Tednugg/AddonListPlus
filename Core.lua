@@ -59,17 +59,6 @@ end
 -- because the set of installed addons can't change without a restart.
 ---------------------------------------------------------------------------
 
-local function NormalizeCategory(raw)
-	if not raw then return end
-	local low = strlower(raw)
-	for _, pair in ipairs(ns.CategoryKeywords) do
-		if strfind(low, pair[1], 1, true) then
-			return pair[2]
-		end
-	end
-	return (gsub(raw, "^%s*(.-)%s*$", "%1"))
-end
-
 local function IsAncestor(candidate, node)
 	-- true if node is candidate or one of candidate's parents
 	local guard = 0
@@ -180,33 +169,12 @@ function ns:BuildStatic()
 	end
 	tsort(self.roots, SortNodes)
 
-	-- Categories (roots decide, children follow their root)
-	local function ChildTag(node)
-		for _, c in ipairs(node.children) do
-			local tag = Meta(c.index, "X-Category") or ChildTag(c)
-			if tag then return tag end
-		end
-	end
-	for _, root in ipairs(self.roots) do
-		local cat = NormalizeCategory(Meta(root.index, "Category"))
-			or self.BuiltinCategory[root.stripped]
-			or NormalizeCategory(Meta(root.index, "X-Category"))
-			or NormalizeCategory(ChildTag(root))
-			or self.OTHER
-		root.category = cat
-	end
-
-	-- Icons, category inheritance and search text
+	-- Icons and search text (search only looks at names: the title and the folder name)
 	local function Finish(node, parent)
-		if parent then
-			node.category = parent.category
-		end
 		node.icon = Meta(node.index, "IconTexture") or Meta(node.index, "X-IconTexture") or Meta(node.index, "X-Icon")
 			or self.BuiltinIcon[node.stripped]
 			or (parent and parent.icon)
-		node.search = strlower(table.concat({
-			node.titlePlain, node.name, StripColors(node.notes), node.author or "", node.category or "",
-		}, "\n"))
+		node.search = strlower(node.titlePlain .. "\n" .. node.name)
 		for _, c in ipairs(node.children) do
 			Finish(c, node)
 		end
@@ -406,35 +374,80 @@ function ns:BuildDisplay()
 		MarkVisible(root, self.tokens, searching)
 	end
 
-	if db.view == "category" then
-		local cats, order = {}, {}
-		for _, root in ipairs(self.roots) do
-			if root.visible then
-				local c = root.category or self.OTHER
-				if not cats[c] then
-					cats[c] = {}
-					tinsert(order, c)
-				end
-				tinsert(cats[c], root)
+	for _, root in ipairs(self.roots) do
+		AddNode(list, root, 0, db, searching)
+	end
+end
+
+---------------------------------------------------------------------------
+-- Presets: saved sets of enabled/disabled addons, shared by every character.
+-- Each preset is { enabled = { [folder] = true }, disabled = { [folder] = true } }.
+-- Addons that aren't in a preset (installed after it was saved) are left alone.
+---------------------------------------------------------------------------
+
+function ns:PresetNames()
+	local names = {}
+	for name in pairs(self.db.presets) do
+		tinsert(names, name)
+	end
+	tsort(names, function(a, b) return strlower(a) < strlower(b) end)
+	return names
+end
+
+function ns:SavePreset(name)
+	local p = { enabled = {}, disabled = {} }
+	for i = 1, GetNumAddOns() do
+		local folder, _, _, enabled = GetAddOnInfo(i)
+		if folder then
+			if enabled then p.enabled[folder] = true else p.disabled[folder] = true end
+		end
+	end
+	self.db.presets[name] = p
+	self.db.lastPreset = name
+end
+
+function ns:DeletePreset(name)
+	self.db.presets[name] = nil
+	if self.db.lastPreset == name then self.db.lastPreset = nil end
+end
+
+-- Ticks the boxes to match the preset; Okay/Reload UI makes it stick, Cancel undoes it.
+function ns:ApplyPreset(name)
+	local p = self.db.presets[name]
+	if not p then return end
+	for i = 1, GetNumAddOns() do
+		local folder = GetAddOnInfo(i)
+		if folder and p.enabled[folder] then
+			EnableAddOn(i)
+		elseif folder and p.disabled[folder] then
+			DisableAddOn(i)
+		end
+	end
+	EnableAddOn(ADDON) -- never lock yourself out of the list
+	self.db.lastPreset = name
+end
+
+local function PresetMatches(p)
+	for i = 1, GetNumAddOns() do
+		local folder, _, _, enabled = GetAddOnInfo(i)
+		if folder and folder ~= ADDON then
+			if (enabled and p.disabled[folder]) or (not enabled and p.enabled[folder]) then
+				return false
 			end
 		end
-		tsort(order, function(a, b)
-			if a == self.OTHER then return false end
-			if b == self.OTHER then return true end
-			return a < b
-		end)
-		for _, c in ipairs(order) do
-			local collapsed = (not searching) and db.collapsedCats[c]
-			tinsert(list, { kind = "category", category = c, count = #cats[c], collapsed = collapsed })
-			if not collapsed then
-				for _, root in ipairs(cats[c]) do
-					AddNode(list, root, 1, db, searching)
-				end
-			end
-		end
-	else
-		for _, root in ipairs(self.roots) do
-			AddNode(list, root, 0, db, searching)
+	end
+	return true
+end
+
+-- Name of the preset matching the current checkboxes, if any. The last one used wins ties.
+function ns:ActivePreset()
+	local last = self.db.lastPreset
+	if last and self.db.presets[last] and PresetMatches(self.db.presets[last]) then
+		return last
+	end
+	for _, name in ipairs(self:PresetNames()) do
+		if PresetMatches(self.db.presets[name]) then
+			return name
 		end
 	end
 end
@@ -527,9 +540,9 @@ events:SetScript("OnEvent", function(self, event, arg1)
 	if event == "ADDON_LOADED" and arg1 == ADDON then
 		AddonListPlusDB = AddonListPlusDB or {}
 		local db = AddonListPlusDB
-		db.view = db.view or "az"
-		db.collapsedCats = db.collapsedCats or {}
+		db.view, db.collapsedCats = nil, nil -- left over from 1.0 (category view)
 		db.collapsedAddons = db.collapsedAddons or {}
+		db.presets = db.presets or {}
 		ns.db = db
 
 		Snapshot(ns.sessionState)
