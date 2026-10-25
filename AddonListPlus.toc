@@ -1,0 +1,12 @@
+## Interface: 30300
+## Title: AddonListPlus
+## Notes: Searchable in-game addon list with categories, sub-addon grouping and memory usage, in the style of the modern client.
+## Author: Tednug
+## Version: 1.0.0
+## OptionalDeps: ElvUI, ElvUI_Enhanced, ACP
+## SavedVariables: AddonListPlusDB
+## X-Category: Interface Enhancements
+
+Data.lua
+Core.lua
+UI.lua
