@@ -33,3 +33,7 @@ If ElvUI Enhanced or Addon Control Panel already adds an AddOns button to the Es
 
 - **In-game only.** On 3.3.5 the login/character screen can't be changed by addons; addons only load once you enter the world.
 - **Current character only.** In-game, 3.3.5 can only enable or disable addons for the character you are logged in on. The "All characters" option exists only on the login screen.
+
+## License
+
+[MIT](LICENSE). You're free to use, modify and share it, as long as the license notice stays included.
